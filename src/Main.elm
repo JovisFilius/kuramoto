@@ -1,5 +1,9 @@
 module Main exposing (..)
 
+import Array exposing
+    ( Array
+    )
+
 import Browser
 
 import ByJovis.Color exposing (linearInterpolation)
@@ -62,17 +66,20 @@ main = Browser.element
 
 type alias State =
     { running: Bool
-    , oscillators: Oscillators
+    , oscillators: List Oscillator
     , coupling : Float
-    , dt : Float
     , simulationSpeed : Float
     }
 
 
-type alias Oscillators =
-    { freqs : List Float
-    , feedbacks : List Float
-    , phases : List Float
+type alias Oscillator =
+    { freq : Float
+    , phases : Float
+    }
+
+type alias Kuramoto =
+    { oscillators : Array Oscillator
+    , coupling : Float -> Float
     }
 
 
@@ -93,7 +100,6 @@ init _ =
             , phases = List.repeat nO 0
             }
         , coupling = 0.0
-        , dt = 10
         , simulationSpeed = 1
     }
     , Random.generate OscillatorSeeds (seedOscillatorStates nO)
@@ -116,6 +122,7 @@ sampleFreq = Random.map (\x -> freqMean + freqStd*x) gaussian
 freqMean = 10
 freqStd = 2
 nO = 30
+dt = 1
 -- dt = 10 -- milliseconds
 -- nT = 1000
 
@@ -133,7 +140,7 @@ type Msg
 
 
 update : Msg -> State -> (State, Cmd Msg)
-update msg ({running, oscillators, coupling, dt} as state) =
+update msg ({running, oscillators, coupling} as state) =
     case msg of
         ToggleRunning ->
             ( { state | running = not running }
@@ -161,16 +168,16 @@ update msg ({running, oscillators, coupling, dt} as state) =
             )
 
         _ ->
-            ( { state | oscillators = stepOscillators coupling oscillators dt }
+            ( { state | oscillators = stepOscillators coupling oscillators }
             , Cmd.none
             )
 
 
-stepOscillators : Float -> Oscillators -> Float -> Oscillators
-stepOscillators k oscillators dt =
+stepOscillators : Float -> Kuramoto -> Kuramoto
+stepOscillators t kuramoto =
     let
         couplingFeedbacks =
-            List.map (couplingFeedback oscillators.phases k) oscillators.phases
+            List.map (couplingFeedback oscillators.phases (kuramoto.coupling t)) oscillators.phases
 
         coupledFreqs =
             List.map2
@@ -180,7 +187,7 @@ stepOscillators k oscillators dt =
 
     in
     { oscillators
-        | phases = updatePhases oscillators.phases coupledFreqs dt
+        | phases = updatePhases oscillators.phases coupledFreqs
         , feedbacks = couplingFeedbacks
     }
 
@@ -193,8 +200,8 @@ couplingFeedback phases k phase_i =
         k * (List.sum phaseDiffs)
 
 
-updatePhases : List Float -> List Float -> Float -> List Float
-updatePhases phases cFreqs  dt =
+updatePhases : List Float -> List Float -> List Float
+updatePhases phases cFreqs =
     let
         d_phase cFreq = (cFreq * dt / 1000)
 
@@ -285,7 +292,7 @@ view ({running, oscillators, coupling} as state) =
 
 
 controlpanelView : State -> Element Msg
-controlpanelView ({running, coupling, dt}as state) =
+controlpanelView ({running, coupling} as state) =
     row
         [ alignLeft
         , paddingEach {left = 40, right = 40, top = 15, bottom = 15}
@@ -374,7 +381,7 @@ controlpanelView ({running, coupling, dt}as state) =
             }
         ]
 
-debugView : Oscillators -> Element Msg
+debugView : Kuramoto -> Element Msg
 debugView oscs =
     let
         freqs = oscs.freqs
@@ -457,13 +464,13 @@ freqColor freq =
         hi = freqMean + 2*freqStd
         f = (freq - lo) / (hi - lo)
     in
-    linearInterpolation (0.25, 0.1, 1) (0, 1, 0) f
+    linearInterpolation (0.25, 0.1, 1) (0, 1, 1) f
 
 
 r_perc = 25
 
 
-kuramotoView : Oscillators -> Element Msg
+kuramotoView : Kuramoto -> Element Msg
 kuramotoView oscillators =
     let
         r = 600
@@ -526,9 +533,9 @@ svgColorString (r,g,b) =
 
 
 subscriptions : State -> Sub Msg
-subscriptions {running, dt, simulationSpeed} =
+subscriptions {running, simulationSpeed} =
     if running then
-        Time.every (dt / simulationSpeed) (\time -> Tick)
+        Time.every 20 (\time -> Tick)
     else
         Sub.none
 

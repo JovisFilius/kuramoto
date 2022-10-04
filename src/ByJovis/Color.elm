@@ -38,8 +38,8 @@ type alias SRGB = (Float, Float, Float)
 
 
 init =
-    { start = (0.5,0,1)
-    , end = (0,1,0)
+    { start = (0,1,0)
+    , end = (1,0,0)
     , nSteps = 1000
     }
 
@@ -103,7 +103,7 @@ linearInterpolation (r1,g1,b1) (r2,g2,b2) f_ =
                 f_
 
         interp v1 v2 =
-            encode <| (decode v1) + (decode v2) * f
+            encode <| (decode v1) + ((decode v2) - (decode v1)) * f
     in
         (interp r1 r2, interp g1 g2, interp b1 b2)
 
