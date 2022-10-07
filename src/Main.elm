@@ -1,8 +1,10 @@
 module Main exposing (..)
 
-import Array exposing
+import Array as A exposing
     ( Array
     )
+
+import Array2D as A2
 
 import Browser
 
@@ -29,7 +31,7 @@ import Element.Input as Input
 
 import Html exposing (Html)
 
-import List
+import List as L
 
 import Random
 
@@ -65,21 +67,26 @@ main = Browser.element
 
 
 type alias State =
-    { running: Bool
-    , oscillators: List Oscillator
-    , coupling : Float
+    { running : Bool
+    , kuramoto : Kuramoto
+    , step : KuramotoStep
     , simulationSpeed : Float
     }
 
 
 type alias Oscillator =
     { freq : Float
-    , phases : Float
+    , phase : Float
     }
 
 type alias Kuramoto =
     { oscillators : Array Oscillator
     , coupling : Float -> Float
+    }
+
+type alias KuramotoStep =
+    { feedbacks : List Float
+    , coupledFreqs : List Float
     }
 
 
@@ -99,7 +106,7 @@ init _ =
             , feedbacks = List.repeat nO 0
             , phases = List.repeat nO 0
             }
-        , coupling = 0.0
+        , coupling = 0.0 -- always 0.0
         , simulationSpeed = 1
     }
     , Random.generate OscillatorSeeds (seedOscillatorStates nO)
@@ -168,50 +175,100 @@ update msg ({running, oscillators, coupling} as state) =
             )
 
         _ ->
-            ( { state | oscillators = stepOscillators coupling oscillators }
+            ( { state | kuramoto = updateKuramoto state.kuramoto }
             , Cmd.none
             )
 
 
-stepOscillators : Float -> Kuramoto -> Kuramoto
-stepOscillators t kuramoto =
+size : Kuramoto -> Int
+size kuramoto =
+    A.length <| kuramoto.oscillators
+
+
+phases : Kuramoto -> List Float
+phases kuramoto =
+    A.map .phase (kuramoto.oscillators)
+
+freqs : Kuramoto -> List Float
+freqs kuramoto =
+    A.map .freq (kuramoto.oscillators)
+
+
+kuramotoStep : Kuramoto -> Float -> KuramotoStep
+kuramotoStep kuramoto t =
     let
-        couplingFeedbacks =
-            List.map (couplingFeedback oscillators.phases (kuramoto.coupling t)) oscillators.phases
-
-        coupledFreqs =
-            List.map2
-                (+)
-                oscillators.freqs
-                couplingFeedbacks
-
-    in
-    { oscillators
-        | phases = updatePhases oscillators.phases coupledFreqs
-        , feedbacks = couplingFeedbacks
-    }
+        n = size kuramoto
+        interactions = A2.initialize (interaction kuramoto)
+        interactions = L.map <| (L.map <| interaction kuramoto (L.range 0 (n-1))) <| L.range 0 (n-1)
+        feedbacks
 
 
-couplingFeedback : List Float -> Float -> Float -> Float
-couplingFeedback phases k phase_i =
+updateKuramoto : Kuramoto -> Float -> Kuramoto
+updateKuramoto kuramoto t =
     let
-        phaseDiffs = List.map (\phase_j -> sin(phase_j - phase_i)) phases
+        n = size kuramoto
     in
-        k * (List.sum phaseDiffs)
+        { kuramoto
+            | oscillators = A.map (stepOscillator kuramoto t) (A.fromList <| L.range 0 (n-1))
+        }
 
 
-updatePhases : List Float -> List Float -> List Float
-updatePhases phases cFreqs =
+interaction : Kuramoto -> Int -> Int -> Float
+interaction kuramoto i j =
+    if i > j then
+        -1 * (interaction kuramoto j i)
+    else
+        let
+            o1 = A.get i (kuramoto.oscillators)
+            o2 = A.get j (kuramoto.oscillators)
+        in
+            sin(o2.phase - o1.phase)
+
+
+couplingFeedback : Kuramoto -> Float -> Int -> Float
+couplingFeedback kuramoto t i =
     let
-        d_phase cFreq = (cFreq * dt / 1000)
+        n = size kuramoto
+        interactions = L.map (interaction kuramoto i) <| L.range 0 (n-1)
 
-        modulo_2pi phase =
-            if phase > (2*pi) then
-                modulo_2pi (phase - 2*pi)
-            else
-                phase
+        k = kuramoto.coupling t
     in
-    List.map2 (\phase cFreq -> modulo_2pi <| phase + d_phase cFreq) phases cFreqs
+        k * (List.sum interactions)
+
+
+coupledFreq : Kuramoto -> Float -> Int -> Float
+coupledFreq kuramoto t i =
+    (couplingFeedback kuramoto t i) + get i (freqs kuramoto)
+
+
+stepOscillator : Kuramoto -> Float -> Int -> Kuramoto
+stepOscillator kuramoto t i =
+    let
+        oscillator = A.get i kuramoto.oscillators
+        naturalFreq = oscillator.freq
+        phase = oscillator.phase
+
+        coupledFreq = naturalFreq + (couplingFeedback kuramoto i t)
+
+        d_phase = coupledFreq * dt / 1000
+
+        new_phase = modulo (phase + d_phase) (2*pi)
+        new_oscillator = { oscillator | phase = new_phase }
+    in
+        { kuramoto | oscillators = A.set i new_oscillator kuramoto.oscillators }
+
+
+-- updatePhases oscillator freq =
+--     let
+--         d_phase cFreq = (freq * dt / 1000)
+
+--         modulo_2pi phase =
+--             if phase > (2*pi) then
+--                 modulo_2pi (phase - 2*pi)
+--             else
+--                 phase
+--     in
+--         List.phase = new_phase }map2 (\phase cFreq -> modulo_2pi <| phase + d_phase cFreq) phases cFreqs
 
 
 
@@ -219,19 +276,19 @@ updatePhases phases cFreqs =
 
 
 view : State -> Html Msg
-view ({running, oscillators, coupling} as state) =
+view ({running, kuramoto, coupling} as state) =
     let
-        phs = oscillators.phases
+        phs = phases kuramoto
         mu_phs = phaseMean phs
         lags = List.map (phaseDiff mu_phs) phs
 
-        minX = Maybe.withDefault 0 <| List.minimum (oscillators.freqs)
+        minX = Maybe.withDefault 0 <| List.minimum (freqs kuramoto)
         minY = Maybe.withDefault 0 <| List.minimum lags
 
         point x y = {x = x, y = y}
         data =
             List.map2 point
-            oscillators.freqs
+            (freqs kuramoto)
             lags
     in
     layout
@@ -251,7 +308,7 @@ view ({running, oscillators, coupling} as state) =
             , spacing 40
             , width fill
             ]
-            [ debugView oscillators
+            [ debugView state
             , column
                 [ spacing 15
                 ]
@@ -260,7 +317,7 @@ view ({running, oscillators, coupling} as state) =
                     , centerY
                     , Background.color <| rgb 0.5 0.5 0.5
                     ]
-                    <| kuramotoView oscillators
+                    <| kuramotoView kuramoto
                 , controlpanelView state
                 ]
             , el
@@ -381,13 +438,13 @@ controlpanelView ({running, coupling} as state) =
             }
         ]
 
-debugView : Kuramoto -> Element Msg
-debugView oscs =
+debugView : State -> Element Msg
+debugView {kuramoto, step} =
     let
-        freqs = oscs.freqs
-        fdbs = oscs.feedbacks
-        cFreqs = List.map2 (+) oscs.feedbacks oscs.freqs
-        phs = oscs.phases
+        -- freqs = oscs.freqs
+        fdbs = step.feedbacks
+        cFreqs = step.coupledFreqs
+        phs = phases kuramoto
         mu_phs = phaseMean phs
         lags = List.map (phaseDiff mu_phs) phs
                
